@@ -101,8 +101,8 @@ searchReservesPrimo <- function(data, id_field = "search_id", vid, scope, gatewa
     str_pad(10, side= "left", pad = "0")
   
 
-  isbnResults <- purrr::pmap_dfr(list(isbn, data$search_id, vid, 
-                                      scope, gateway, exl_key), 
+  isbnResults <- purrr::pmap_dfr(list(isbn, data$search_id, vid = vid, 
+                                      scope = scope, gateway = gateway, exl_key = exl_key), 
                                  getBibsIsbnPrimo)
 
   
@@ -538,13 +538,20 @@ findNewReserves <- function(most_recent_file, penultimate_file = "",  dir = "",
   
   last_date <- max(original$confirmed_date)
   
+  # all books in new sheet that have a later confirmed date than the last sheet
   newBooks <- update_data[which(update_data$confirmed_date > last_date),]
   
-  sameDate <- bind_rows(update_data[which(update_data$confirmed_date == last_date),], 
-                        original[which(original$confirmed_date > last_date),]) %>%
-    distinct(in_title, course_title, in_isbn, .keep_all = TRUE)
+  # something to do with books confirmed on the same date
+  # sameDate <- bind_rows(update_data[which(update_data$confirmed_date == last_date),], 
+  #                       original[which(original$confirmed_date > last_date),]) %>%
+  #   distinct(in_title, course_title, in_isbn, .keep_all = TRUE)
   
-  newBooks <- bind_rows(newBooks, sameDate)
+  # should be this?
+  overlappingDate <- anti_join(update_data[which(update_data$confirmed_date == last_date),],
+                               original[which(original$confirmed_date == last_date),],
+                               by = c("in_isbn", "course_title"))   
+  
+  newBooks <- bind_rows(newBooks, overlappingDate)
   
   
   # newBooks <- anti_join(update_data, original, by = c("campus_description", "college_name", "term_desc", 
@@ -954,6 +961,8 @@ cleanTitle <- function(in_title, max_char = 50) {
     #if on two lines, take second line
     str_replace( "^.*\\r\\n", "") %>%
     str_replace(" new edition ?$", "") %>%
+    str_replace("UPDTD & EXPD", "") %>% 
+    str_replace("ORIGINAL ED$", "") %>%
     str_replace(" 3rd rev$", "") %>%
     str_replace(": centennial edition[ \\d-]*", "") %>%
     str_replace(" new ed$", "") %>%
