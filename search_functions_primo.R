@@ -961,8 +961,8 @@ cleanTitle <- function(in_title, max_char = 50) {
     #if on two lines, take second line
     str_replace( "^.*\\r\\n", "") %>%
     str_replace(" new edition ?$", "") %>%
-    str_replace("UPDTD & EXPD", "") %>% 
-    str_replace("ORIGINAL ED$", "") %>%
+    str_replace("updtd & expd", "") %>% 
+    str_replace("original ed$", "") %>%
     str_replace(" 3rd rev$", "") %>%
     str_replace(": centennial edition[ \\d-]*", "") %>%
     str_replace(" new ed$", "") %>%
@@ -987,6 +987,7 @@ cleanTitle <- function(in_title, max_char = 50) {
     str_replace("& sketches","") %>%
     str_replace("updtd","") %>%
     str_replace("w/new afterword","") %>%
+    str_replace("w/rdgs & hdbk","") %>%
     str_replace("w/afterword","") %>%
     str_replace("w/new foreword","") %>%
     str_replace("w/new preface","") %>%
@@ -1077,7 +1078,7 @@ getEbooksFromGobi <- function(gobifile, ownedByTitle, licenses = c("Unlimited", 
   gobi <- suppressWarnings(read_delim(paste0("input\\" ,gobiFile), 
                                       "\t", escape_double = FALSE, col_types = cols(ISBN = col_character()), 
                                       trim_ws = TRUE) %>%
-                             filter(Publisher != "INSTAREAD" & Publisher != "JOOSR" & Publisher != "MOBILEREFERENCE COM"))
+                             filter(Publisher != "INSTAREAD" & Publisher != "JOOSR" & Publisher != "MOBILEREFERENCE COM" & Publisher != "BRIGHTSUMMARIES COM"))
   
   ebookOptions <- gobi[which(!is.na(gobi$ISBN)), c("ISBN",  "Pub_Year", names(gobi)[grep("ItemVendor_[1-6]\\.(Supplier|List_Price|Library_Availability|Purchase_Option)",names(gobi))])]
   
