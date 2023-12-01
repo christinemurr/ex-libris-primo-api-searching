@@ -474,7 +474,7 @@ if(any(online) & !any(matchedYear & online)){
   
   unmatched_online_recs <- recs[online]
   unmatched_mms <- unlist(map(unmatched_online_recs, pluck, "pnx", "display", "mms", .default = NA))
-  otherEditionsMMS <- paste("Other editions (e): ", paste(mms, collapse = "; "))
+  otherEditionsMMS <- paste("Other editions (e): ", paste(unmatched_mms, collapse = "; "))
   unmatched_online <- data.frame(search_id, mms = otherEditionsMMS, delivery = "online", path = resp$path)
   results <- data.frame(search_id, mms, delivery, path = resp$path) %>% 
     bind_rows(unmatched_online)
