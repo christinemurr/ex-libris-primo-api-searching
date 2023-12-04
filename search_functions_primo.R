@@ -1172,7 +1172,81 @@ getEbooksFromGobi <- function(gobifile, ownedByTitle, licenses = c("Unlimited", 
   
 }
 
+# get portfolio, collection and service ids from mms
 
+getCollectionIds <- function(mms_id, exl_key = getOption("reserves_search.exl_key", NULL)){
+  if(is.na(mms_id) | substr(mms_id,1,2) != "99"){
+    return(data.frame(mms_id, portfolio_id = NA, collection_id= NA, service_id = NA))
+  } else {
+    resp <- try(alma_portfolios_helper(mms_id, exl_key = exl_key))
+    
+    if ("try-error" %in% class(resp) | !is.null(resp[["content"]][["errorsExist"]])) {
+      return(data.frame(mms_id, portfolio_id = NA, collection_id= NA, service_id = NA))
+    }
+    
+    portfolio_id <- resp[["content"]][["portfolio"]][[1]][["id"]]
+    collection_id <- resp[["content"]][["portfolio"]][[1]][["electronic_collection"]][["id"]][["value"]]
+    service_id <- resp[["content"]][["portfolio"]][[1]][["electronic_collection"]][["service"]][["value"]]
+    Sys.sleep(.5)
+    return(data.frame(mms_id, portfolio_id, collection_id, service_id))
+  }
+}
+
+getPublicAccess <- function(mms_id, collection_id, service_id, portfolio_id, exl_key) {
+  resp <- try(alma_collections_helper(collection_id = collection_id, service_id = service_id,
+                                      portfolio_id = portfolio_id, 
+                                      exl_key = getOption("reserves_search.exl_key", NULL)))
+  
+  if ("try-error" %in% class(resp)) {
+    return(data.frame(public_access_model = NA, path = paste0("Problem with query:", query)))
+  }
+  
+  public_access_model <- resp[["content"]][["public_access_model"]][["value"]]
+  Sys.sleep(.5)
+  return(data.frame(mms_id, public_access_model, path = resp$path))
+}
+
+alma_portfolios_helper <- function(mms_id, 
+                                   gateway = "api-na.hosted.exlibrisgroup.com", 
+                                   exl_key){
+  suppressPackageStartupMessages(require(httr))
+  
+  reqUrl <- paste0("https://", gateway,
+                   "/almaws/v1/bibs/", mms_id, "/portfolios?","&apikey=", exl_key)
+  
+  resp <- httr::GET(reqUrl)
+  
+  parsed <- jsonlite::fromJSON(content(resp, "text"), simplifyVector = FALSE)
+  
+  structure(
+    list(content = parsed,
+         path = resp$url,
+         response = resp),
+    class = "alma_api"
+  )
+}
+
+alma_collections_helper <- function(collection_id, service_id, portfolio_id, 
+                                    gateway = "api-na.hosted.exlibrisgroup.com", 
+                                    exl_key){
+  suppressPackageStartupMessages(require(httr))
+  
+  reqUrl <- paste0("https://", gateway,
+                   "/almaws/v1/electronic/e-collections/", 
+                   collection_id, "/e-services/", service_id, 
+                   "/portfolios/", portfolio_id,"?&apikey=", exl_key)
+  
+  resp <- httr::GET(reqUrl)
+  
+  parsed <- jsonlite::fromJSON(content(resp, "text"), simplifyVector = FALSE)
+  
+  structure(
+    list(content = parsed,
+         path = resp$url,
+         response = resp),
+    class = "alma_api"
+  )
+}
 
 primo_api_helper <- function(query, gateway = "api-na.hosted.exlibrisgroup.com", exl_key = getOption("reserves_search.exl_key", NULL), 
                              vid, limit = 100, scope="MyInstitution", 
