@@ -981,7 +981,7 @@ cleanTitle <- function(in_title, max_char = 50) {
     str_replace(" book \\d\\d?$", "") %>%
     str_replace("; or .*$", "") %>%
     str_replace(": integrated course in elem japanese 1", "") %>%
-    str_replace("w/new intro", "") %>%
+    str_replace("w/new intro.*$", "") %>%
     str_replace(" elem ", " elementary ") %>%
     str_replace(" 2nd$", "") %>%
     str_replace("vol one", "") %>%
@@ -997,6 +997,8 @@ cleanTitle <- function(in_title, max_char = 50) {
     str_replace("& sketches","") %>%
     str_replace("updtd","") %>%
     str_replace("w/new afterword","") %>%
+    str_replace("w/ handbook","") %>%
+    str_replace("w/ readings","") %>%
     str_replace("w/rdgs & hdbk","") %>%
     str_replace("w/afterword","") %>%
     str_replace("w/new foreword","") %>%
