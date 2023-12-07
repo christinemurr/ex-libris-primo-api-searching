@@ -418,10 +418,20 @@ getBibsAuthorTitlePrimo <- function(title, last_name, year, isbn, search_id = NA
 
    # if there are no copies with year +/- 1 
   if(!any(matchedYear)){
-    otherEditionsMMS <- paste("Other editions: ", paste(unlist(map(recs, pluck, "pnx", "display", "mms", .default = NA))[!matchedYear], collapse = "; "))
+    # detect ebooks
     
-    # only include other editions if no results?
+    alma_e <- map(recs, pluck, "delivery", "deliveryCategory", .default = "none") %>% 
+      map(unlist) %>% 
+      map(function (x) any(x == "Alma-E")) %>% 
+      unlist()
+    
+    if (all(alma_e)){
+      # if all the other editions are e, indicate e and return
+      otherEditionsMMS <- paste("Other editions (e):", paste(unlist(map(recs, pluck, "pnx", "display", "mms", .default = NA))[!matchedYear], collapse = "; "))
+      return(data.frame(search_id, mms = otherEditionsMMS, delivery = "online", path = resp$path))    
+    }
 
+    otherEditionsMMS <- paste("Other editions:", paste(unlist(map(recs, pluck, "pnx", "display", "mms", .default = NA))[!matchedYear], collapse = "; "))
     
     return(data.frame(search_id, mms = otherEditionsMMS, delivery = "", path = resp$path))
   }    
@@ -1122,6 +1132,7 @@ getEbooksFromGobi <- function(gobifile, ownedByTitle, licenses = c("Unlimited", 
     dplyr::mutate(volIsbns = str_c(str_sort(ISBN), collapse = "; ")) %>%
     distinct(author, title, Purchase_Option, .keep_all = TRUE) %>%
     dcast(volIsbns + Pub_Year + title + author + uniqid ~ Purchase_Option) %>%
+     #bring in info from Primo search and book list, joins by title
     left_join(ownedByTitle) %>%
      
     # mark ebooks whose pub dates don't match
@@ -1136,7 +1147,8 @@ getEbooksFromGobi <- function(gobifile, ownedByTitle, licenses = c("Unlimited", 
     #  mutate(allIsbns = str_c("'",str_sort(ISBN), collapse = "; ")) %>%
     group_by(allIsbns) %>%
     select(-volIsbns) %>%
-    distinct(author, title, allIsbns, .keep_all = TRUE) %>%
+    distinct(author, title, delivery, allIsbns, .keep_all = TRUE) %>%
+#     distinct(author, title, allIsbns, .keep_all = TRUE) %>%
     dplyr::mutate(across(licenses_available, ~min(.x, na.rm = TRUE))) %>%
     dplyr::mutate(min = min(across(licenses_available))) %>%
     filter(min < (as.numeric(in_listprice_new) + price_diff))
@@ -1184,9 +1196,12 @@ getCollectionIds <- function(mms_id, exl_key = getOption("reserves_search.exl_ke
       return(data.frame(mms_id, portfolio_id = NA, collection_id= NA, service_id = NA))
     }
     
-    portfolio_id <- resp[["content"]][["portfolio"]][[1]][["id"]]
-    collection_id <- resp[["content"]][["portfolio"]][[1]][["electronic_collection"]][["id"]][["value"]]
-    service_id <- resp[["content"]][["portfolio"]][[1]][["electronic_collection"]][["service"]][["value"]]
+    #portfolio_id <- resp[["content"]][["portfolio"]][[1]][["id"]]
+    portfolio_id <- unlist(map(resp[["content"]][["portfolio"]], pluck, "id", .default = "none"))
+    # collection_id <- resp[["content"]][["portfolio"]][[1]][["electronic_collection"]][["id"]][["value"]]
+    collection_id <- unlist(map(resp[["content"]][["portfolio"]], pluck, "electronic_collection","id", "value",.default = "none"))
+    #service_id <- resp[["content"]][["portfolio"]][[1]][["electronic_collection"]][["service"]][["value"]]
+    service_id <- unlist(map(resp[["content"]][["portfolio"]], pluck, "electronic_collection","service", "value",.default = "none"))
     Sys.sleep(.5)
     return(data.frame(mms_id, portfolio_id, collection_id, service_id))
   }
