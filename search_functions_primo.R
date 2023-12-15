@@ -7,7 +7,7 @@ prepareBookList <- function(data, filename = "", authorVar = "in_author", titleV
                             yearVar = "in_copyright",
                             noText = "*** NO TEXT ***",
                             skipAuthors = c("NONBOOK", "STAFF","TURNING TECHNOLOGIES",
-                                            "POLL EVERYWHERE", "RITE IN THE RAIN", "BARCHARTS"),
+                                            "POLL EVERYWHERE", "RITE IN THE RAIN", "BARCHARTS", "AKTIV LEARNING"),
                             skipTitles = c("COURSEPACK", "MODEL KIT", "LAB NOTEBOOK",
                                            "LAB MANUAL","WORKBOOK", "LABORATORY MANUAL", 
                                            "WKBK", "Safety Glasses, Aquilus OTG")){
@@ -77,7 +77,10 @@ prepareBookList <- function(data, filename = "", authorVar = "in_author", titleV
 
 # searching the Primo API by ISBN and then author/title
 
-searchReservesPrimo <- function(data, id_field = "search_id", vid, scope, gateway = "api-na.hosted.exlibrisgroup.com", 
+searchReservesPrimo <- function(data, id_field = "search_id", 
+                                vid, scope, 
+                                license_field = NA, license_value = NA,
+                                gateway = "api-na.hosted.exlibrisgroup.com", 
                                 exl_key = getOption("reserves_search.exl_key", NULL), 
                                 ws_key = getOption("reserves_search.ws_key", NULL)){
   
@@ -85,7 +88,7 @@ searchReservesPrimo <- function(data, id_field = "search_id", vid, scope, gatewa
   stopifnot("in_isbn" %in% names(data), "in_title" %in% names(data), 
             "in_author" %in% names(data), "in_copyright" %in% names(data),
             exists(deparse(substitute(data))))
- 
+  
   # rename id field if necessary 
   if (!id_field %in% names(data)){
     data$search_id <- 1:nrow(data)
@@ -100,17 +103,18 @@ searchReservesPrimo <- function(data, id_field = "search_id", vid, scope, gatewa
   isbn <- data[["in_isbn"]] %>%
     str_pad(10, side= "left", pad = "0")
   
-
+  
   isbnResults <- purrr::pmap_dfr(list(isbn, data$search_id, vid = vid, 
+                                      license_field = license_field, license_value = license_value,
                                       scope = scope, gateway = gateway, exl_key = exl_key), 
                                  getBibsIsbnPrimo)
-
+  
   
   #merge with data
   isbnResults_m <- merge(data, isbnResults) %>% 
     #only keep results
     filter(mms != "") 
-
+  
   message("finished searching Primo by ISBN")
   
   #get rid of weirdnesses in title  
@@ -137,10 +141,11 @@ searchReservesPrimo <- function(data, id_field = "search_id", vid, scope, gatewa
   
   authorTitleResults <- purrr::pmap_dfr(list(title, last_name, year, isbn, exl_key = exl_key, 
                                              vid = vid, gateway = gateway, ws_key = ws_key,
-                                             scope = scope, search_id = data$search_id), 
+                                             scope = scope, search_id = data$search_id,
+                                             license_field = license_field, license_value = license_value), 
                                         getBibsAuthorTitlePrimo)
   
-
+  
   
   authorTitleResults_m <- merge(authorTitleResults, data, by = "search_id") %>% 
     #keep rows that either returned an MMS or returned none in ISBN search
@@ -148,7 +153,7 @@ searchReservesPrimo <- function(data, id_field = "search_id", vid, scope, gatewa
     mutate(otherEditions = str_replace(str_extract(mms, "Other editions:\\s+[0-9]{18}"), "Other editions:  ", "")) %>% 
     filter(is.na(otherEditions) | !otherEditions %in% isbnResults_m$mms) %>% 
     select(-otherEditions)
-
+  
   # combining the two sets of results
   
   results <- bind_rows(authorTitleResults_m, isbnResults_m) %>% 
@@ -160,8 +165,9 @@ searchReservesPrimo <- function(data, id_field = "search_id", vid, scope, gatewa
 
 
 getBibsIsbnPrimo <- function(isbn, search_id = NA, vid, scope, check_availability = TRUE,
-                                    gateway = "api-na.hosted.exlibrisgroup.com", 
-                                    exl_key = getOption("reserves_search.exl_key", NULL)){
+                             license_field = NA, license_value = NA,
+                             gateway = "api-na.hosted.exlibrisgroup.com", 
+                             exl_key = getOption("reserves_search.exl_key", NULL)){
   
   suppressPackageStartupMessages(require(purrr))
   suppressPackageStartupMessages(require(tidyjson))
@@ -171,17 +177,17 @@ getBibsIsbnPrimo <- function(isbn, search_id = NA, vid, scope, check_availabilit
   suppressPackageStartupMessages(require(httr))
   suppressPackageStartupMessages(require(xml2))
   
-
+  
   query <- URLencode(paste0("isbn,contains,",isbn), reserved = TRUE)
-
+  
   
   resp <- try(primo_api_helper(query = query, gateway = gateway, scope = scope, vid=vid,
                                exl_key = exl_key))
   
   
-  
   if ("try-error" %in% class(resp)) {
-    return(data.frame(search_id = search_id, mms = "", delivery = "", path = paste0("Problem with query:", query)))
+    return(data.frame(search_id = search_id, mms = "", delivery = "", 
+                      path = paste0("Problem with query:", query)))
   }
   
   nullResult <- data.frame(search_id = search_id, mms = "", delivery = "", path = resp$path) 
@@ -199,7 +205,7 @@ getBibsIsbnPrimo <- function(isbn, search_id = NA, vid, scope, check_availabilit
     map(unlist) %>% 
     map(function (x) any(x == "Alma-E")) %>% 
     unlist()
-    
+  
   
   online <- unlist(map(recs, pluck, "pnx", "display", "format", .default = "none")) %>% 
     str_detect("online")
@@ -221,8 +227,20 @@ getBibsIsbnPrimo <- function(isbn, search_id = NA, vid, scope, check_availabilit
   }
   
   delivery <- ifelse(online, "online", callNums)
-
-
+  
+  if(all(!is.na(license_field))) {
+    
+    limited_license <- unlist(map(recs, pluck, 
+                                  "pnx", "display", license_field, 
+                                  .default = ""))
+    
+    delivery <- ifelse(limited_license %in% license_value, 
+                       "online (limited)", delivery)
+  }
+  
+  
+  
+  
   results <- data.frame(search_id, mms, delivery, path = resp$path)
   
   Sys.sleep(1)
@@ -230,9 +248,9 @@ getBibsIsbnPrimo <- function(isbn, search_id = NA, vid, scope, check_availabilit
   
 }
 
-
-getBibsAuthorTitlePrimo <- function(title, last_name, year, isbn, search_id = NA, check_availability = TRUE,
-                                    vid, scope,
+getBibsAuthorTitlePrimo <- function(title, last_name, year, isbn, search_id = NA, 
+                                    check_availability = TRUE,
+                                    vid, scope, license_field = NA, license_value = NA,
                                     gateway = "api-na.hosted.exlibrisgroup.com", 
                                     exl_key = getOption("reserves_search.exl_key", NULL), 
                                     ws_key = getOption("reserves_search.ws_key", NULL)){
@@ -245,117 +263,117 @@ getBibsAuthorTitlePrimo <- function(title, last_name, year, isbn, search_id = NA
   suppressPackageStartupMessages(require(xml2))
   suppressPackageStartupMessages(require(purrr))
   
-
+  
   #pull only books and ebooks
   
   query <- URLencode(paste0("title,contains,",URLencode(title, reserved = TRUE),
                             ",AND;creator,contains,",URLencode(last_name, reserved = TRUE)))
-
+  
   resp <- primo_api_helper(query = query, vid = vid, scope = scope, gateway = gateway, 
                            exl_key = exl_key)
   
   nullResult <- data.frame(search_id, mms = "", delivery = "", path = resp$path)
   
   
-
+  
   if ( resp[["content"]][["info"]][["total"]] == 0) {
-
+    
     # make so wskey is optional (skip this part if there is no wskey)
     if (is.null(ws_key)) {
       
       return(nullResult)
       
     } else {
-    
-    # get new info from WorldCat search    
-    newReq <- getWorldCatbyISBN(isbn, wskey = ws_key)
-    
-    #if author and title are found in WorldCat; make new request
-    if (is.null(newReq)){
       
-      return(nullResult)
+      # get new info from WorldCat search    
+      newReq <- getWorldCatbyISBN(isbn, wskey = ws_key)
       
-    } else {
-      
-      title <- newReq$title[[1]] %>%
-        str_to_lower() %>%
-        str_split(":|\\. ", simplify = TRUE) %>%
-        as.data.frame(stringsAsFactors = FALSE) %>%
-        select("V1") %>%
-        as.character() %>%
-        str_replace("\\, or\\, .*", "") %>%
-        str_replace("^the ","") %>%
-        str_replace("^a[n]? ","") %>%
-        str_replace_all('"', "") %>%
-        str_replace_all(";|,", "")%>%
-        str_trim() 
-      
-      #this is something about limiting length of title
-      
-      titlewords <- strsplit(title, "\\s")
-      
-      title_lengths <- lapply(lapply(titlewords, nchar), cumsum)
-      
-      wordsintitle <- lapply(title_lengths, function(x) which(x < 50))
-      
-      # replace with seq_along?
-      for (i in 1:length(title)){
-        title[i] <-  paste(titlewords[[i]][wordsintitle[[i]]], collapse = " ")
-      }
-      
-      
-      #put quotes around titles that contain not (or catalog will interpret as boolean) 
-      # necessary in Primo API?
-      
-      title <- ifelse(grepl("\\bnot\\b", title), paste0('"', title, '"'), title)
-      
-      #able to simplify with str_locate(",")?
-      # substr(author_name, 1, str_locate(author_name, ",")[1]-1)
-      
-      # last_name <- stri_trans_general(newReq$author[[1]], "latin-ascii") %>%
-      #   str_split(",", simplify = TRUE) %>%
-      #   as.data.frame(stringsAsFactors = FALSE) %>%
-      #   select("V1") %>%
-      #   as.character() %>%
-      #   str_trim() 
-      
-      #pull out everything before the comma, if there is one
-      last_name <- stri_trans_general(newReq$author[[1]], "latin-ascii") %>%
-        ifelse(str_detect(., ","), str_sub(., 1, str_locate(., ",")[1]-1), .) %>% 
-        str_trim()
-       
+      #if author and title are found in WorldCat; make new request
+      if (is.null(newReq)){
         
-      
-      
-      #pulls only books and ebooks
-      if (length(last_name) > 0) {
-        
-        query <- URLencode(paste0("title,contains,",title,",AND;creator,contains,",last_name))
+        return(nullResult)
         
       } else {
         
-        #replace with Primo search
-        query <- URLencode(paste0("title,contains,",title))
+        title <- newReq$title[[1]] %>%
+          str_to_lower() %>%
+          str_split(":|\\. ", simplify = TRUE) %>%
+          as.data.frame(stringsAsFactors = FALSE) %>%
+          select("V1") %>%
+          as.character() %>%
+          str_replace("\\, or\\, .*", "") %>%
+          str_replace("^the ","") %>%
+          str_replace("^a[n]? ","") %>%
+          str_replace_all('"', "") %>%
+          str_replace_all(";|,", "")%>%
+          str_trim() 
+        
+        #this is something about limiting length of title
+        
+        titlewords <- strsplit(title, "\\s")
+        
+        title_lengths <- lapply(lapply(titlewords, nchar), cumsum)
+        
+        wordsintitle <- lapply(title_lengths, function(x) which(x < 50))
+        
+        # replace with seq_along?
+        for (i in 1:length(title)){
+          title[i] <-  paste(titlewords[[i]][wordsintitle[[i]]], collapse = " ")
+        }
+        
+        
+        #put quotes around titles that contain not (or catalog will interpret as boolean) 
+        # necessary in Primo API?
+        
+        title <- ifelse(grepl("\\bnot\\b", title), paste0('"', title, '"'), title)
+        
+        #able to simplify with str_locate(",")?
+        # substr(author_name, 1, str_locate(author_name, ",")[1]-1)
+        
+        # last_name <- stri_trans_general(newReq$author[[1]], "latin-ascii") %>%
+        #   str_split(",", simplify = TRUE) %>%
+        #   as.data.frame(stringsAsFactors = FALSE) %>%
+        #   select("V1") %>%
+        #   as.character() %>%
+        #   str_trim() 
+        
+        #pull out everything before the comma, if there is one
+        last_name <- stri_trans_general(newReq$author[[1]], "latin-ascii") %>%
+          ifelse(str_detect(., ","), str_sub(., 1, str_locate(., ",")[1]-1), .) %>% 
+          str_trim()
+        
+        
+        
+        
+        #pulls only books and ebooks
+        if (length(last_name) > 0) {
+          
+          query <- URLencode(paste0("title,contains,",title,",AND;creator,contains,",last_name))
+          
+        } else {
+          
+          #replace with Primo search
+          query <- URLencode(paste0("title,contains,",title))
+          
+        }
+        
+        resp <- primo_api_helper(query = query, vid = vid, scope = scope, gateway = gateway, 
+                                 exl_key = exl_key)
+        
+        # fix this
+        nullResult$path <- resp$path
+        
+        
+        
+        if (resp[["content"]][["info"]][["totalResultsLocal"]] == 0) {
+          return(nullResult)
+        } 
         
       }
-      
-      resp <- primo_api_helper(query = query, vid = vid, scope = scope, gateway = gateway, 
-                               exl_key = exl_key)
-      
-      # fix this
-      nullResult$path <- resp$path
-      
-
-      
-      if (resp[["content"]][["info"]][["totalResultsLocal"]] == 0) {
-        return(nullResult)
-      } 
-        
     }
   }
-}
   
-
+  
   
   
   #create a simplified, shortened title    
@@ -370,53 +388,54 @@ getBibsAuthorTitlePrimo <- function(title, last_name, year, isbn, search_id = NA
     str_replace_all(" & ", " and ") %>%
     str_squish()
   
-
-
-    
-#    recs <- make a list of recs
-	
- #see which records in results match the simplifed, shortened title   
-    realTitleMatch <- unlist(map(resp[["content"]][["docs"]], pluck, "pnx", "display", "title", .default = NA)) %>%
+  
+  
+  
+  #    recs <- make a list of recs
+  
+  #see which records in results match the simplifed, shortened title   
+  realTitleMatch <- unlist(map(resp[["content"]][["docs"]], pluck, "pnx", "display", "title", .default = NA)) %>%
+    str_to_lower() %>%
+    stri_trans_general("latin-ascii") %>%
+    str_replace(";|,|\\?","") %>%
+    str_replace( "/", " ") %>%
+    str_replace_all('[tT]he ', "") %>%
+    str_replace('^[Aa]n? ', "") %>%							 
+    str_replace_all("'|,|\\.", "") %>%
+    str_replace_all("&", "and") %>%
+    str_replace_all( "\\-"," ") %>% 
+    str_squish() %>% 
+    str_detect(paste0("^", title_short))
+  
+  
+  #what if there is no real title match?
+  if(!any(realTitleMatch)) {
+    return(nullResult)
+  }
+  
+  recs <- resp[["content"]][["docs"]][realTitleMatch]
+  
+  #weed out "readers"
+  
+  if (!grepl("reader|reading", title)){
+    notReaders <- unlist(map(recs, pluck, "pnx", "display", "title", .default = NA)) %>%
       str_to_lower() %>%
-      stri_trans_general("latin-ascii") %>%
-      str_replace(";|,|\\?","") %>%
-      str_replace( "/", " ") %>%
-      str_replace_all('[tT]he ', "") %>%
-	  str_replace('^[Aa]n? ', "") %>%							 
-      str_replace_all("'|,|\\.", "") %>%
-      str_replace_all("&", "and") %>%
-      str_squish() %>% 
-      str_detect(paste0("^", title_short))
-	  
+      str_detect("reader\\b|reading\\b")
     
-    #what if there is no real title match?
-    if(!any(realTitleMatch)) {
-      return(nullResult)
-    }
-    
-    recs <- resp[["content"]][["docs"]][realTitleMatch]
-    
-    #weed out "readers"
-    
-    if (!grepl("reader|reading", title)){
-      notReaders <- unlist(map(recs, pluck, "pnx", "display", "title", .default = NA)) %>%
-        str_to_lower() %>%
-        str_detect("reader\\b|reading\\b")
-      
-      recs <- recs[!notReaders]
-    }
-    
-    # is it possible to have a null title?
- 
-
-    years <-  unlist(map(recs, pluck, "pnx", "sort", "creationdate", .default = ""))
-
-    
-    # whether the item matches the year of listed editions
-    matchedYear <- years %>% 
-      str_detect(paste(as.numeric(year) + -1:1, collapse="|"))
-
-   # if there are no copies with year +/- 1 
+    recs <- recs[!notReaders]
+  }
+  
+  # is it possible to have a null title?
+  
+  
+  years <-  unlist(map(recs, pluck, "pnx", "sort", "creationdate", .default = ""))
+  
+  
+  # whether the item matches the year of listed editions
+  matchedYear <- years %>% 
+    str_detect(paste(as.numeric(year) + -1:1, collapse="|"))
+  
+  # if there are no copies with year +/- 1 
   if(!any(matchedYear)){
     # detect ebooks
     
@@ -427,18 +446,29 @@ getBibsAuthorTitlePrimo <- function(title, last_name, year, isbn, search_id = NA
     
     if (all(alma_e)){
       # if all the other editions are e, indicate e and return
+      if(!is.na(license_field)) {
+        
+        limited_license <- unlist(map(recs, pluck, 
+                                      "pnx", "display", license_field, 
+                                      .default = ""))
+        
+        # all() in case there are two other editions        
+        delivery <- ifelse(all(limited_license %in% license_value), 
+                           "online (limited)", "online")
+      }
+      
       otherEditionsMMS <- paste("Other editions (e):", paste(unlist(map(recs, pluck, "pnx", "display", "mms", .default = NA))[!matchedYear], collapse = "; "))
-      return(data.frame(search_id, mms = otherEditionsMMS, delivery = "online", path = resp$path))    
+      return(data.frame(search_id, mms = otherEditionsMMS, delivery = delivery, path = resp$path))    
     }
-
+    
     otherEditionsMMS <- paste("Other editions:", paste(unlist(map(recs, pluck, "pnx", "display", "mms", .default = NA))[!matchedYear], collapse = "; "))
     
     return(data.frame(search_id, mms = otherEditionsMMS, delivery = "", path = resp$path))
   }    
-    
- #what if print matches year but the only available ebook does not match year?
-# e.g. neighbors/gross
-    
+  
+  #what if print matches year but the only available ebook does not match year?
+  # e.g. neighbors/gross
+  
   
   online <- unlist(map(recs, pluck, "pnx", "display", "format", .default = "none")) %>% 
     str_detect("online")
@@ -453,55 +483,60 @@ getBibsAuthorTitlePrimo <- function(title, last_name, year, isbn, search_id = NA
     map(unlist) %>% 
     map(function (x) any(x == "Alma-E")) %>% 
     unlist()
-
+  
   
   # even if the format does not contain online, make online if there is Alma-E in deliveryCategory
   matched_online <- ifelse(alma_e, TRUE, matched_online)
-
+  
   
   mms <- unlist(map(matched_recs, pluck, "pnx", "display", "mms", .default = NA))
-
+  
   callNumber <- map_chr(matched_recs, pluck, "delivery", "bestlocation", "callNumber", .default = "")
   unavailable <- map_chr(matched_recs, pluck, "delivery", "bestlocation", "availabilityStatus", .default = "") == "unavailable"
   
   locs <- map_chr(matched_recs, pluck, "delivery", "bestlocation", "subLocation", .default = "")
-
-
-callNums <- ifelse(callNumber != "", paste("print: ",locs, callNumber, sep = " "), "")
-
-if (check_availability == TRUE){
-  callNums <- ifelse(unavailable, paste0(callNums, " (not available)"), callNums)
-}
   
-
-# make online and call number one column?
-
-delivery <- ifelse(matched_online, "online", callNums)
-
-
-# if there are online versions but none of those versions match the year
-if(any(online) & !any(matchedYear & online)){
   
-  unmatched_online_recs <- recs[online]
-  unmatched_mms <- unlist(map(unmatched_online_recs, pluck, "pnx", "display", "mms", .default = NA))
-  otherEditionsMMS <- paste("Other editions (e): ", paste(unmatched_mms, collapse = "; "))
-  unmatched_online <- data.frame(search_id, mms = otherEditionsMMS, delivery = "online", path = resp$path)
-  results <- data.frame(search_id, mms, delivery, path = resp$path) %>% 
-    bind_rows(unmatched_online)
-} else {
-  results <- data.frame(search_id, mms, delivery, path = resp$path)
+  callNums <- ifelse(callNumber != "", paste("print: ",locs, callNumber, sep = " "), "")
+  
+  if (check_availability == TRUE){
+    callNums <- ifelse(unavailable, paste0(callNums, " (not available)"), callNums)
   }
-
-
-
+  
+  
+  
+  delivery <- ifelse(matched_online, "online", callNums)
+  
+  if(!is.na(license_field)) {
+    
+    limited_license <- unlist(map(matched_recs, pluck, 
+                                  "pnx", "display", license_field, 
+                                  .default = ""))
+    
+    delivery <- ifelse(limited_license %in% license_value, 
+                       "online (limited)", delivery)
+  }
+  
+  
+  # if there are online versions but none of those versions match the year
+  if(any(online) & !any(matchedYear & online)){
+    
+    unmatched_online_recs <- recs[online]
+    unmatched_mms <- unlist(map(unmatched_online_recs, pluck, "pnx", "display", "mms", .default = NA))
+    otherEditionsMMS <- paste("Other editions (e): ", paste(unmatched_mms, collapse = "; "))
+    unmatched_online <- data.frame(search_id, mms = otherEditionsMMS, delivery = "online", path = resp$path)
+    results <- data.frame(search_id, mms, delivery, path = resp$path) %>% 
+      bind_rows(unmatched_online)
+  } else {
+    results <- data.frame(search_id, mms, delivery, path = resp$path)
+  }
+  
+  
+  
   Sys.sleep(1)
   return(results)
-
+  
 }
-
-
-
-
 
 findNewReserves <- function(most_recent_file, penultimate_file = "",  dir = "", 
                             skipAuthors = c("NONBOOK",  "STAFF","TURNING TECHNOLOGIES",
@@ -972,10 +1007,12 @@ cleanTitle <- function(in_title, max_char = 50) {
     str_replace( "^.*\\r\\n", "") %>%
     str_replace(" new edition ?$", "") %>%
     str_replace("updtd & expd", "") %>% 
+    str_replace("updtd ed", "") %>% 
     str_replace("original ed$", "") %>%
     str_replace(" 3rd rev$", "") %>%
     str_replace(": centennial edition[ \\d-]*", "") %>%
     str_replace(" new ed$", "") %>%
+    str_replace("\\[e\\-book\\]", "") %>%
     str_replace("very short intro$", "very short introduction") %>%
     str_replace(" rev & updtd", "") %>%
     str_replace(" book \\d\\d?$", "") %>%
@@ -1035,6 +1072,7 @@ cleanTitle <- function(in_title, max_char = 50) {
     str_replace("ebook:\\s*https?://cbbcat.net/record=b[0-9]*~s19\\s*", "") %>%
     str_replace(" expd", "") %>%
     str_replace(" 1$", "") %>%
+    str_replace_all( "\\-"," ") %>%
     str_squish()
   
   #try to fix extra long titles
@@ -1280,6 +1318,11 @@ primo_api_helper <- function(query, gateway = "api-na.hosted.exlibrisgroup.com",
                    query, "&pcAvailability=false&conVoc=false&limit=",limit,"&qInclude=",facet,"&apikey=", exl_key)
   
   resp <- httr::GET(reqUrl)
+
+  # resp <- httr::GET(url = paste0("https://", gateway), path = "primo/v1/search",
+  #                    query = list(vid = vid, tab = tab, scope = scope,
+  #                                 limit = limit, q = query, qInclude = facet,
+  #                                 apikey = exl_key))
   
   if (http_type(resp) == "text/plain") {
     # error seem to be in xml instad of json
