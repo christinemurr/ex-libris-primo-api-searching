@@ -7,7 +7,8 @@ prepareBookList <- function(data, filename = "", authorVar = "in_author", titleV
                             yearVar = "in_copyright",
                             noText = "*** NO TEXT ***",
                             skipAuthors = c("NONBOOK", "STAFF","TURNING TECHNOLOGIES",
-                                            "POLL EVERYWHERE", "RITE IN THE RAIN", "BARCHARTS", "AKTIV LEARNING"),
+                                            "POLL EVERYWHERE", "RITE IN THE RAIN", "BARCHARTS", 
+                                            "AKTIV LEARNING", "Texas Instruments"),
                             skipTitles = c("COURSEPACK", "MODEL KIT", "LAB NOTEBOOK",
                                            "LAB MANUAL","WORKBOOK", "LABORATORY MANUAL", 
                                            "WKBK", "Safety Glasses, Aquilus OTG")){
@@ -207,8 +208,95 @@ getBibsIsbnPrimo <- function(isbn, search_id = NA, vid, scope, check_availabilit
     unlist()
   
   
-  online <- unlist(map(recs, pluck, "pnx", "display", "format", .default = "none")) %>% 
-    str_detect("online")
+  # online <- unlist(map(recs, pluck, "pnx", "display", "format", .default = "none")) %>% 
+  #   str_detect("online")
+  
+  online <- map(recs, pluck, "pnx", "display", "format", .default = "none") %>%
+   map(function(x) any(str_detect(x, "online")))
+  
+  # even if the format does not contain online, make online if there is Alma-E in deliveryCategory
+  online <- ifelse(alma_e, TRUE, online)
+  
+  mms <- unlist(map(resp[["content"]][["docs"]], pluck, "pnx", "display", "mms", .default = NA))
+  
+  callNumber <- map_chr(recs, pluck, "delivery", "bestlocation", "callNumber", .default = "")
+  unavailable <- map_chr(recs, pluck, "delivery", "bestlocation", "availabilityStatus", .default = "") == "unavailable"
+  locs <- map_chr(recs, pluck, "delivery", "bestlocation", "subLocation", .default = "")
+  
+  #use sprintf instead?
+  callNums <- ifelse(callNumber != "", paste("print: ",locs, callNumber, sep = " "), "") 
+  
+  if (check_availability == TRUE){
+    callNums <- ifelse(unavailable, paste0(callNums, " (not available)"), callNums)
+  }
+  
+  delivery <- ifelse(online, "online", callNums)
+  
+  if(all(!is.na(license_field))) {
+    
+    limited_license <- unlist(map(recs, pluck, 
+                                  "pnx", "display", license_field, 
+                                  .default = ""))
+    
+    delivery <- ifelse(limited_license %in% license_value, 
+                       "online (limited)", delivery)
+  }
+  
+  
+  
+  
+  results <- data.frame(search_id, mms, delivery, path = resp$path)
+  
+  Sys.sleep(1)
+  return(results)
+  
+}
+
+getBibsOclcPrimo <- function(oclc_num, search_id = NA, vid, scope, check_availability = TRUE,
+                             license_field = NA, license_value = NA,
+                             gateway = "api-na.hosted.exlibrisgroup.com", 
+                             exl_key = getOption("reserves_search.exl_key", NULL)){
+  
+  suppressPackageStartupMessages(require(purrr))
+  suppressPackageStartupMessages(require(tidyjson))
+  suppressPackageStartupMessages(require(dplyr))
+  suppressPackageStartupMessages(require(stringr))
+  suppressPackageStartupMessages(require(stringi))
+  suppressPackageStartupMessages(require(httr))
+  suppressPackageStartupMessages(require(xml2))
+  
+  
+  query <- URLencode(paste0("any,contains,", oclc_num), reserved = TRUE)
+  
+  
+  resp <- try(primo_api_helper(query = query, gateway = gateway, scope = scope, vid=vid,
+                               exl_key = exl_key))
+  
+  
+  if ("try-error" %in% class(resp)) {
+    return(data.frame(search_id = search_id, mms = "", delivery = "", 
+                      path = paste0("Problem with query:", query)))
+  }
+  
+  nullResult <- data.frame(search_id = search_id, mms = "", delivery = "", path = resp$path) 
+  
+  
+  if ( resp[["content"]][["info"]][["total"]] == 0) {
+    return(nullResult)
+  }
+  
+  #pull out records
+  recs <- resp[["content"]][["docs"]]
+  
+  # look for Alma-E
+  alma_e <- map(recs, pluck, "delivery", "deliveryCategory", .default = "none") %>% 
+    map(unlist) %>% 
+    map(function (x) any(x == "Alma-E")) %>% 
+    unlist()
+  
+  
+  online <- map(recs, pluck, "pnx", "display", "format", .default = "none") %>%
+    map(function(x) any(str_detect(x, "online")))
   
   # even if the format does not contain online, make online if there is Alma-E in deliveryCategory
   online <- ifelse(alma_e, TRUE, online)
@@ -470,14 +558,19 @@ getBibsAuthorTitlePrimo <- function(title, last_name, year, isbn, search_id = NA
   # e.g. neighbors/gross
   
   
-  online <- unlist(map(recs, pluck, "pnx", "display", "format", .default = "none")) %>% 
-    str_detect("online")
+  # online <- unlist(map(recs, pluck, "pnx", "display", "format", .default = "none")) %>% 
+  #   str_detect("online")
+  
+   online <- map(recs, pluck, "pnx", "display", "format", .default = "none") %>%
+     map(function(x) any(str_detect(x, "online"))) %>% 
+     unlist()
   
   
   matched_recs <- recs[matchedYear]
   
-  matched_online <- unlist(map(matched_recs, pluck, "pnx", "display", "format", .default = "none")) %>% 
-    str_detect("online")
+  matched_online <- map(matched_recs, pluck, "pnx", "display", "format", .default = "none") %>%
+    map(function(x) any(str_detect(x, "online"))) %>% 
+    unlist()
   
   alma_e <- map(matched_recs, pluck, "delivery", "deliveryCategory", .default = "none") %>% 
     map(unlist) %>% 
@@ -519,7 +612,7 @@ getBibsAuthorTitlePrimo <- function(title, last_name, year, isbn, search_id = NA
   
   
   # if there are online versions but none of those versions match the year
-  if(any(online) & !any(matchedYear & online)){
+  if(any(online) & !any(matched_online)){
     
     unmatched_online_recs <- recs[online]
     unmatched_mms <- unlist(map(unmatched_online_recs, pluck, "pnx", "display", "mms", .default = NA))
@@ -1007,7 +1100,8 @@ cleanTitle <- function(in_title, max_char = 50) {
     str_replace( "^.*\\r\\n", "") %>%
     str_replace(" new edition ?$", "") %>%
     str_replace("updtd & expd", "") %>% 
-    str_replace("updtd ed", "") %>% 
+    str_replace("updtd ed", "") %>%
+    str_replace(", critical ed$", "") %>% 
     str_replace("original ed$", "") %>%
     str_replace(" 3rd rev$", "") %>%
     str_replace(": centennial edition[ \\d-]*", "") %>%
@@ -1107,7 +1201,113 @@ cleanName <- function(in_author){
   return(last_name)
 }
 
-
+getEbooksFromGobiTidyr <- function(gobifile, ownedByTitle, 
+                                   licenses = c("Unlimited", "DRM free"), 
+                                   max_price = 300, price_diff = 50, 
+                                   outputVariables = c("cu_name", "title", "in_author", "in_copyright",
+                                                       "in_isbn", "required_code",
+                                                       "allCourses",  "section_note",
+                                                       "course_note",  "ve_name", "course_description",
+                                                       "section_course_reference_nbr",
+                                                       "in_listprice_new", "mms",
+                                                       "delivery" )) {
+  
+  # find those books with "." for a title for start with "
+  
+  con <- file(paste0("input\\" ,gobiFile),"r") 
+  gobiLines <- suppressWarnings(readLines(con))
+  
+  
+  fixed_lines <- gobiLines[!grepl('^\\s?\\.|"', gobiLines)]
+  
+  writeLines(fixed_lines, con = paste0("input\\fixed", gobiFile))
+  
+  # close connection
+  close(con)
+  
+  
+  
+  
+  gobi <- suppressWarnings(read_delim(paste0("input\\fixed", gobiFile), 
+                                      "\t", escape_double = FALSE, col_types = cols(ISBN = col_character()), 
+                                      trim_ws = TRUE) %>%
+                             filter(Publisher != "INSTAREAD" & Publisher != "JOOSR" & Publisher != "MOBILEREFERENCE COM" & Publisher != "BRIGHTSUMMARIES COM"))
+  
+  ebookOptions <- gobi[which(!is.na(gobi$ISBN)), c("ISBN",  "Pub_Year", names(gobi)[grep("ItemVendor_[1-6]\\.(Supplier|List_Price|Library_Availability|Purchase_Option)",names(gobi))])]
+  
+  ebooksForSale <- ebookOptions %>% 
+    pivot_longer(-c("ISBN", "Pub_Year")) %>% 
+    filter(!is.na(value)) %>% 
+    mutate(item = substr(name, 12,12)) %>% 
+    arrange(ISBN, item) %>% 
+    mutate(name = str_replace(name, "ItemVendor_[1-6]\\.", "")) %>% 
+    filter(name %in% c("List_Price", "Purchase_Option", 
+                       "Library_Availability", "Supplier")) %>% 
+    mutate(value = ifelse(grepl("DRM-free", value), "DRM free", value)) %>% 
+    mutate(value = ifelse(grepl("Concurrent|Linear", value), 
+                          "Concurrent access/Non-linear", value)) %>% 
+    mutate(value = ifelse(value %in% c("Unlimited User", "Unlimited User Access", 
+                                       "Unlimited Access"), "Unlimited", value)) %>% 
+    distinct() %>% 
+    pivot_wider(id_cols = c(ISBN, Pub_Year, item))%>%
+    filter(Library_Availability == "Contract on file") %>%
+    # filter out concurrent or other undesired licenses
+    filter(Purchase_Option %in% licenses) %>% 
+    filter(List_Price != "Not Known") %>% 
+    mutate(List_Price = as.numeric(str_replace(List_Price, " USD", ""))) %>% 
+    #multiply the JSTOR price by 3
+    mutate(List_Price = ifelse(Supplier == "JSTOR", List_Price * 3, List_Price)) %>%
+    filter(List_Price < max_price) %>%
+    left_join(isbnsToSearchGobi[c("isbnsForGobi", "title", "author", 
+                                  "uniqid")], by = c("ISBN" = "isbnsForGobi")) %>% 
+    arrange(ISBN, List_Price) %>% 
+    group_by(uniqid, Purchase_Option) %>%
+    mutate(value = min(List_Price)) %>%
+    select(ISBN, Pub_Year, uniqid, author, title, Purchase_Option, value) %>% 
+    # concatenate isbns of different editions
+    group_by(author, title, Purchase_Option) %>%
+    #  mutate(ebookIsbns = str_c(str_sort(ISBN), collapse = "; ")) %>% 
+    mutate(ebookIsbns = str_c(str_sort(unique(str_trim(ISBN))), collapse = "; ")) %>% 
+    ungroup() %>% 
+    distinct(author, title, Purchase_Option, .keep_all = TRUE) 
+  
+  # pull out licenses so those columns can be referred to later
+  licenses_available <- licenses[licenses %in% ebooksForSale$Purchase_Option]
+  
+  ebooksForSale <- ebooksForSale %>%
+    pivot_wider(id_cols = c(ebookIsbns, Pub_Year, title, author, uniqid), 
+                names_from = Purchase_Option) %>%
+    #bring in info from Primo search and book list, joins by title
+    # should it remove online(limited), to reduce duplicate lines?
+    # is there any way to avoid many-to-many?
+    left_join(distinct(ownedByTitle[c("search_id", "in_copyright")]), by =  c("uniqid" = "search_id")) %>% 
+    # mark ebooks whose pub dates don't match
+    mutate(in_copyright = as.numeric(in_copyright)) %>%
+    mutate(badPubDate = abs(Pub_Year - as.numeric(in_copyright)) > 1) %>% 
+    # get rid of those if the dates don't match
+    filter(!badPubDate) %>% 
+    select(-in_copyright, -title) %>% 
+    left_join(ownedByTitle, by =  c("uniqid" = "search_id")) %>% 
+    distinct(author, title, delivery, ebookIsbns, .keep_all = TRUE) %>%
+    #     distinct(author, title, allIsbns, .keep_all = TRUE) %>%
+    #  dplyr::mutate(across(licenses_available, ~min(.x, na.rm = TRUE))) %>%
+    group_by(uniqid) %>% 
+    mutate(min = min(across(licenses_available), na.rm = TRUE)) %>%
+    filter(min < (as.numeric(in_listprice_new) + price_diff))
+  
+  #only add columns for desired licenses
+  
+  for (i in 1:length(licenses)){
+    if(!licenses[i] %in% names(ebooksForSale)){
+      ebooksForSale[licenses[i]] <- NA
+    }
+  } 
+  
+  ebooksForSale_results <- list(ebooksForSale[c("ebookIsbns", "Pub_Year", outputVariables,
+                                                "totalExpectedStudents", licenses)], ebooksForSale$uniqid)
+  return(ebooksForSale_results)
+  
+}
 
 getEbooksFromGobi <- function(gobifile, ownedByTitle, licenses = c("Unlimited", "DRM free"), 
                               max_price = 300, price_diff = 50, 
@@ -1125,7 +1325,20 @@ getEbooksFromGobi <- function(gobifile, ownedByTitle, licenses = c("Unlimited", 
   suppressMessages(require(dplyr))
   suppressMessages(require(reshape2))
   
-  gobi <- suppressWarnings(read_delim(paste0("input\\" ,gobiFile), 
+  # find those books with "." for a title for start with "
+  
+  con <- file(paste0("input\\" ,gobiFile),"r") 
+  suppressWarnings(gobiLines <- readLines(con))
+  
+  
+  fixed_lines <- gobiLines[!grepl('^\\s?\\.|"', gobiLines)]
+  
+  writeLines(fixed_lines, con = paste0("input\\fixed", gobiFile))
+  
+  # close connection
+  close(con)
+  
+  gobi <- suppressWarnings(read_delim(paste0("input\\fixed", gobiFile), 
                                       "\t", escape_double = FALSE, col_types = cols(ISBN = col_character()), 
                                       trim_ws = TRUE) %>%
                              filter(Publisher != "INSTAREAD" & Publisher != "JOOSR" & Publisher != "MOBILEREFERENCE COM" & Publisher != "BRIGHTSUMMARIES COM"))
@@ -1227,6 +1440,8 @@ getEbooksFromGobi <- function(gobifile, ownedByTitle, licenses = c("Unlimited", 
 # get portfolio, collection and service ids from mms
 
 getCollectionIds <- function(mms_id, exl_key = getOption("reserves_search.exl_key", NULL)){
+  require(purrr)
+  
   if(is.na(mms_id) | substr(mms_id,1,2) != "99"){
     return(data.frame(mms_id, portfolio_id = NA, collection_id= NA, service_id = NA))
   } else {
@@ -1238,6 +1453,9 @@ getCollectionIds <- function(mms_id, exl_key = getOption("reserves_search.exl_ke
     
     #portfolio_id <- resp[["content"]][["portfolio"]][[1]][["id"]]
     portfolio_id <- unlist(map(resp[["content"]][["portfolio"]], pluck, "id", .default = "none"))
+    if (is.null(portfolio_id)){
+      return(data.frame(mms_id, portfolio_id = NA, collection_id= NA, service_id = NA))
+    }
     # collection_id <- resp[["content"]][["portfolio"]][[1]][["electronic_collection"]][["id"]][["value"]]
     collection_id <- unlist(map(resp[["content"]][["portfolio"]], pluck, "electronic_collection","id", "value",.default = "none"))
     #service_id <- resp[["content"]][["portfolio"]][[1]][["electronic_collection"]][["service"]][["value"]]
