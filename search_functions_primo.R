@@ -1212,6 +1212,10 @@ getEbooksFromGobiTidyr <- function(gobifile, ownedByTitle,
                                                        "in_listprice_new", "mms",
                                                        "delivery" )) {
   
+  suppressPackageStartupMessages(require(dplyr))
+  suppressPackageStartupMessages(require(stringr))
+  suppressPackageStartupMessages(require(tidyr))
+  
   # find those books with "." for a title for start with "
   
   con <- file(paste0("input\\" ,gobiFile),"r") 
@@ -1309,6 +1313,7 @@ getEbooksFromGobiTidyr <- function(gobifile, ownedByTitle,
   
 }
 
+# uses reshape2
 getEbooksFromGobi <- function(gobifile, ownedByTitle, licenses = c("Unlimited", "DRM free"), 
                               max_price = 300, price_diff = 50, 
                               outputVariables = c("cu_name", "title", "in_author", "in_copyright",
